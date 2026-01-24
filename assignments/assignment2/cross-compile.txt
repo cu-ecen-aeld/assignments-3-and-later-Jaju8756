@@ -1,0 +1,5 @@
+jaju@jaju-VivoBook-ASUSLaptop-M1603QA-M1603QA:~/AESD/assignment-1-Jaju8756$ aarch64-none-linux-gnu-gcc -v -print-sysroot
+Using built-in specs.
+COLLECT_GCC=aarch64-none-linux-gnu-gcc
+COLLECT_LTO_WRAPPER=/usr/local/arm-gnu-toolchain-13.3.rel1-x86_64-aarch64-none-linux-gnu/bin/../libexec/gcc/aarch64-none-linux-gnu/13.3.1/lto-wrapper
+/usr/local/arm-gnu-toolchain-13.3.rel1-x86_64-aarch64-none-linux-gnu/bin/../aarch64-none-linux-gnu/libc

@@ -1,0 +1,3 @@
+jaju@jaju-VivoBook-ASUSLaptop-M1603QA-M1603QA:~/AESD/assignment-1-Jaju8756/finder-app$ file writer
+writer: ELF 64-bit LSB executable, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-aarch64.so.1, for GNU/Linux 3.7.0, with debug_info, not stripped
+

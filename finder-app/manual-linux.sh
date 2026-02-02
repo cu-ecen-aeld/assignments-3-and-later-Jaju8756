@@ -1,6 +1,8 @@
 #!/bin/bash
 # Script outline to install and build kernel.
 # Author: Siddhant Jajoo.
+# Modified by Jacqulin Justin
+# Date modified: 30 Jan 2026
 # References: https://github.com/cu-ecen-aeld/aesd-autotest-docker/blob/master/docker/Dockerfile
 
 set -e

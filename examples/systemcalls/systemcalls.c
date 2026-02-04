@@ -1,4 +1,16 @@
+/*
+ *	File modified by Jacqulin Justin
+ *	Date: 29 Jan 2026	
+ */
+ 
+ 
 #include "systemcalls.h"
+#include <stdbool.h>
+#include <stdlib.h>	// EXIT_FAILURE
+#include <unistd.h>	// STDOUT_FILENO
+#include <sys/wait.h>
+#include <fcntl.h>
+#include <stdarg.h>	// va_list, va_start, va_arg, va_end
 
 /**
  * @param cmd the command to execute with system()
@@ -16,8 +28,23 @@ bool do_system(const char *cmd)
  *   and return a boolean true if the system() call completed with success
  *   or false() if it returned a failure
 */
+ 	// If cmd is NULL, there is no command to run
+    if (cmd == NULL) {
+        return false;
+    }
 
-    return true;
+    int status = system(cmd);
+
+	// system() failure check
+    if (status == -1) {
+        return false;
+    }
+
+    if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+        return true;
+    }
+
+    return false;
 }
 
 /**
@@ -44,10 +71,11 @@ bool do_exec(int count, ...)
     {
         command[i] = va_arg(args, char *);
     }
-    command[count] = NULL;
+    command[count] = NULL;	// execv() uses NULL to know where arguments end
+    
     // this line is to avoid a compile warning before your implementation is complete
     // and may be removed
-    command[count] = command[count];
+    // command[count] = command[count]; // became dummy after implementation
 
 /*
  * TODO:
@@ -59,9 +87,35 @@ bool do_exec(int count, ...)
  *
 */
 
-    va_end(args);
+    va_end(args);	// Cleans up va_list
+    
+    fflush(stdout);
+    pid_t pid = fork();
 
-    return true;
+    if (pid == -1) {
+        return false;
+    }
+
+    if (pid == 0) {
+        execv(command[0], command);
+        // execv only returns on failure
+        exit(EXIT_FAILURE);
+    }
+
+    int status;
+    
+    // Parent waits until child finishes
+    if (waitpid(pid, &status, 0) == -1) { 
+        return false;
+    }
+	
+	// Checks if child exited normally && exit code 0 for success
+    if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+        return true;
+    }
+
+    return false;
+
 }
 
 /**
@@ -82,7 +136,7 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
     command[count] = NULL;
     // this line is to avoid a compile warning before your implementation is complete
     // and may be removed
-    command[count] = command[count];
+    // command[count] = command[count];
 
 
 /*
@@ -95,5 +149,43 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
 
     va_end(args);
 
-    return true;
+	fflush(stdout);
+	
+    pid_t pid = fork();
+
+    if (pid == -1) {
+        return false;	
+    }
+
+    if (pid == 0) {
+    	// O_WRONLY → write only
+		// O_CREAT → create if it doesn’t exist
+		// O_TRUNC → clear file if it exists
+    	// 0644 → rw-r--r-- permissions
+        int fd = open(outputfile, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        
+        // File open failure
+        if (fd < 0) {
+            exit(EXIT_FAILURE);
+        }
+		printf("fd value %d", fd);
+		
+        dup2(fd, STDOUT_FILENO);	// Make STDOUT_FILENO refer to the same open file 'outputfile'
+        close(fd);
+
+        execv(command[0], command);
+        exit(EXIT_FAILURE);
+    }
+
+    int status;
+    
+    if (waitpid(pid, &status, 0) == -1) {
+        return false;
+    }
+
+    if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+        return true;
+    }
+
+    return false;
 }

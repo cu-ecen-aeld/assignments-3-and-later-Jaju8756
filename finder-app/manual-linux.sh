@@ -1,27 +1,39 @@
 #!/bin/bash
 # Script outline to install and build kernel.
 # Author: Siddhant Jajoo.
+# Modified by Jacqulin Justin
+# Date modified: 30 Jan 2026
+# References: https://github.com/cu-ecen-aeld/aesd-autotest-docker/blob/master/docker/Dockerfile
 
 set -e
 set -u
 
 OUTDIR=/tmp/aeld
 KERNEL_REPO=git://git.kernel.org/pub/scm/linux/kernel/git/stable/linux-stable.git
-KERNEL_VERSION=v5.1.10
+KERNEL_VERSION=v5.15.163
 BUSYBOX_VERSION=1_33_1
 FINDER_APP_DIR=$(realpath $(dirname $0))
 ARCH=arm64
 CROSS_COMPILE=aarch64-none-linux-gnu-
 
-if [ $# -lt 1 ]
-then
-	echo "Using default directory ${OUTDIR} for output"
+OUTDIR=/tmp/aeld
+
+if [ $# -ge 1 ]; then
+    OUTDIR=$1
+    echo "Using passed directory ${OUTDIR} for output"
 else
-	OUTDIR=$1
-	echo "Using passed directory ${OUTDIR} for output"
+    echo "Using default directory ${OUTDIR} for output"
 fi
 
-mkdir -p ${OUTDIR}
+# Convert to absolute path
+OUTDIR=$(realpath ${OUTDIR})
+
+# Create directory or fail
+mkdir -p "${OUTDIR}" || {
+    echo "ERROR: Failed to create output directory ${OUTDIR}"
+    exit 1
+}
+
 
 cd "$OUTDIR"
 if [ ! -d "${OUTDIR}/linux-stable" ]; then
@@ -35,9 +47,22 @@ if [ ! -e ${OUTDIR}/linux-stable/arch/${ARCH}/boot/Image ]; then
     git checkout ${KERNEL_VERSION}
 
     # TODO: Add your kernel build steps here
+
+	echo "Clean and configure the kernel"
+    make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} mrproper
+    make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} defconfig	# Default ARM64 config
+    
+    echo "Building kernel Image for QEMU"
+    make -j$(nproc) ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} Image
+    
+    echo "Building device tree"
+    make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} dtbs
 fi
 
 echo "Adding the Image in outdir"
+# Copy resulting files generated to outdir. 
+cp ${OUTDIR}/linux-stable/arch/${ARCH}/boot/Image ${OUTDIR}/Image
+
 
 echo "Creating the staging directory for the root filesystem"
 cd "$OUTDIR"
@@ -48,6 +73,11 @@ then
 fi
 
 # TODO: Create necessary base directories
+mkdir -p ${OUTDIR}/rootfs
+cd ${OUTDIR}/rootfs
+
+mkdir -p bin dev etc home lib lib64 proc sbin sys tmp usr/bin usr/lib usr/sbin var/log
+
 
 cd "$OUTDIR"
 if [ ! -d "${OUTDIR}/busybox" ]
@@ -56,25 +86,72 @@ git clone git://busybox.net/busybox.git
     cd busybox
     git checkout ${BUSYBOX_VERSION}
     # TODO:  Configure busybox
+    make distclean
+	make defconfig
+
+
 else
     cd busybox
 fi
 
 # TODO: Make and install busybox
+make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE}
+make CONFIG_PREFIX="${OUTDIR}/rootfs" ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} install
+echo "Busybox installed"
 
 echo "Library dependencies"
+cd ${OUTDIR}/rootfs
 ${CROSS_COMPILE}readelf -a bin/busybox | grep "program interpreter"
 ${CROSS_COMPILE}readelf -a bin/busybox | grep "Shared library"
 
 # TODO: Add library dependencies to rootfs
+SYSROOT=$(${CROSS_COMPILE}gcc -print-sysroot)
+cp -L ${SYSROOT}/lib/ld-linux-aarch64.so.1 lib/
+cp -L ${SYSROOT}/lib64/libm.so.6 lib64/
+cp -L ${SYSROOT}/lib64/libresolv.so.2 lib64/
+cp -L ${SYSROOT}/lib64/libc.so.6 lib64/
 
 # TODO: Make device nodes
+# essential nodes for a minimal rootfs
+echo "Creating device nodes"
+cd ${OUTDIR}/rootfs/dev
+sudo mknod -m 600 console c 5 1
+sudo mknod -m 666 null c 1 3
+
 
 # TODO: Clean and build the writer utility
-
+echo "Clean and build writer utility for ARM64"
+cd "${FINDER_APP_DIR}"
+if [ -f Makefile ]; then
+    make clean
+    make CROSS_COMPILE=${CROSS_COMPILE}
+else
+    # Or compile directly
+    rm -f writer
+    ${CROSS_COMPILE}gcc -Wall -O2 -o writer writer.c
+fi
+	
 # TODO: Copy the finder related scripts and executables to the /home directory
 # on the target rootfs
+cp "${FINDER_APP_DIR}/writer" "${OUTDIR}/rootfs/home/"
+cp "${FINDER_APP_DIR}/finder.sh" "${OUTDIR}/rootfs/home/"
+cp "${FINDER_APP_DIR}/finder-test.sh" "${OUTDIR}/rootfs/home/"
+mkdir -p "${OUTDIR}/rootfs/home/conf"
+cp "${FINDER_APP_DIR}/conf/username.txt" "${OUTDIR}/rootfs/home/conf/"
+cp "${FINDER_APP_DIR}/conf/assignment.txt" "${OUTDIR}/rootfs/home/conf/"
+cp "${FINDER_APP_DIR}/autorun-qemu.sh" "${OUTDIR}/rootfs/home/"
+
+# Update finder-test.sh to reference conf/assignment.txt correctly
+sed -i 's|\.\./conf/assignment.txt|conf/assignment.txt|' ${OUTDIR}/rootfs/home/finder-test.sh
 
 # TODO: Chown the root directory
+echo "Setting ownership of rootfs"
+cd ${OUTDIR}/rootfs
+sudo chown -R root:root *
 
 # TODO: Create initramfs.cpio.gz
+cd "${OUTDIR}/rootfs"
+find . | cpio -H newc -ov --owner root:root > "${OUTDIR}/initramfs.cpio"
+cd "${OUTDIR}"
+gzip -f initramfs.cpio
+echo "cpio utility created"

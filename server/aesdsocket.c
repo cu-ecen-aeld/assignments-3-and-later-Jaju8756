@@ -83,20 +83,32 @@ int main(int argc, char *argv[])
     /*  Daemon Mode after ensuring socket bind to port 9000  */
     if (daemon_mode)
     {
-        pid_t pid = fork();
-        if (pid < 0)
-            exit(EXIT_FAILURE);
-        if (pid > 0)
-            exit(EXIT_SUCCESS);
+		pid_t pid = fork();
+		if (pid < 0)
+			exit(EXIT_FAILURE);
+		if (pid > 0)
+			exit(EXIT_SUCCESS);
 
-        umask(0);
-        setsid();
-        chdir("/");
+		if (setsid() < 0)
+			exit(EXIT_FAILURE);
 
-        close(STDIN_FILENO);
-        close(STDOUT_FILENO);
-        close(STDERR_FILENO);
-    }
+		umask(0);
+
+		if (chdir("/") < 0)
+			exit(EXIT_FAILURE);
+
+		int fd = open("/dev/null", O_RDWR);
+		
+		if (fd >= 0)
+		{
+			dup2(fd, STDIN_FILENO);
+			dup2(fd, STDOUT_FILENO);
+			dup2(fd, STDERR_FILENO);
+			//if (fd > 2)
+				close(fd);
+		}
+
+    	}
 
     /*  Listen  */
     if (listen(server_fd, 5) < 0)
@@ -104,7 +116,7 @@ int main(int argc, char *argv[])
         syslog(LOG_ERR, "Listen failed");
         close(server_fd);
         return -1;
-    }
+    } 	
     
 	// socket(), bind(), listen() are onle-time setup operations
     /*  Accept Loop  */

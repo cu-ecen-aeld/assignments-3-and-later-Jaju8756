@@ -27,11 +27,10 @@ static void signal_handler(int signo)
 {
 	exit_flag = 1;
 	
-    if(signo == SIGINT){
-    	syslog(LOG_INFO, "Caught signal SIGINT, exiting");;
-    } else if(signo == SIGTERM){
-    	syslog(LOG_INFO, "Caught signal SIGTERM, exiting");;
-    }
+	if (signo == SIGINT || signo == SIGTERM)
+	{
+		syslog(LOG_INFO, "Caught signal, exiting");
+	}
 }
 
 int main(int argc, char *argv[])

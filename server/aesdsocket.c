@@ -64,6 +64,15 @@ int main(int argc, char *argv[])
         syslog(LOG_ERR, "Socket creation failed");
         return -1;
     }
+    
+	// SO_REUSEADDR allows to immediately reuse the port even if it's in TIME_WAIT
+	int opt = 1;
+	if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0)
+	{
+		syslog(LOG_ERR, "setsockopt failed: %s", strerror(errno));
+		close(server_fd);
+		return -1;
+	}
 
     /*  Bind  to port 9000*/
     struct sockaddr_in server_addr;
@@ -75,7 +84,8 @@ int main(int argc, char *argv[])
 
     if (bind(server_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
     {
-        syslog(LOG_ERR, "Bind failed");
+        syslog(LOG_ERR, "Bind failed %s", strerror(errno));
+        
         close(server_fd);
         return -1;
     }
@@ -104,11 +114,11 @@ int main(int argc, char *argv[])
 			dup2(fd, STDIN_FILENO);
 			dup2(fd, STDOUT_FILENO);
 			dup2(fd, STDERR_FILENO);
-			//if (fd > 2)
-				close(fd);
-		}
 
-    	}
+			close(fd);
+			syslog(LOG_INFO, "Daemon success");
+		}
+    }
 
     /*  Listen  */
     if (listen(server_fd, 5) < 0)
@@ -139,7 +149,6 @@ int main(int argc, char *argv[])
 				break;
 			}
 		}
-		
 		
         char client_ip[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &client_addr.sin_addr,

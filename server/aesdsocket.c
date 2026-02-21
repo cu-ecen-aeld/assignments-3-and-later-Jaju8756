@@ -1,3 +1,7 @@
+/* References: 	https://stackoverflow.com/questions/14320041/pthread-mutex-initializer-vs-pthread-mutex-init-mutex-param
+				https://man7.org/linux/man-pages/man3/strftime.3.html
+*/
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -13,6 +17,7 @@
 #include <syslog.h>
 #include <fcntl.h>
 #include <pthread.h>
+#include <time.h>
 
 #define PORT 9000
 #define FILE_PATH "/var/tmp/aesdsocketdata"
@@ -22,18 +27,78 @@ int server_fd = -1;
 bool caught_sigint = false;
 bool caught_sigterm = false;
 volatile sig_atomic_t exit_flag = 0;
+timer_t timerid;
 
-
-struct thread_data *head = NULL;
+// Mutex initializtion to keep multithreading safe
 pthread_mutex_t file_mutex = PTHREAD_MUTEX_INITIALIZER;
+struct thread_data *head = NULL;
 
+    
 struct thread_data{
     pthread_t thread_id;
     int client_fd;
     struct sockaddr_in client_addr;
     bool thread_complete;
-    struct thread_data *next;
+    struct thread_data *next;	// singly linked list
 };
+
+void timer_handler(union sigval arg)
+{
+    time_t t = time(NULL);
+    struct tm *tmp = localtime(&t);
+    char timebuf[128];
+
+    ssize_t len = strftime(timebuf, sizeof(timebuf), "timestamp:%a, %d %b %Y %H:%M:%S %z\n", tmp);
+    if (len == 0){
+        printf("strftime failed (buffer too small)\n");
+    } else{
+        printf("Formatted: %s (Bytes: %zu)\n", timebuf, len);
+    }    
+
+    pthread_mutex_lock(&file_mutex);
+
+    int fd = open(FILE_PATH, O_CREAT | O_APPEND | O_WRONLY, 0644);
+    if (fd >= 0)
+    {
+    	syslog(LOG_INFO, "Open %s success", FILE_PATH);
+        ssize_t write_t = write(fd, timebuf, strlen(timebuf));
+        if(write_t < strlen(timebuf)){
+            syslog(LOG_ERR, "Failed write timestamp to %s", FILE_PATH);
+        } else{
+            syslog(LOG_INFO, "Timestamp appended to %s", FILE_PATH);
+        }
+        close(fd);
+    }
+
+    pthread_mutex_unlock(&file_mutex);
+}
+
+void init_timer()
+{
+    struct sigevent sev;
+    struct itimerspec its;
+
+    memset(&sev, 0, sizeof(struct sigevent));
+    sev.sigev_notify = SIGEV_THREAD;
+    sev.sigev_notify_function = timer_handler;
+
+    if(timer_create(CLOCK_REALTIME, &sev, &timerid) == -1){
+    	syslog(LOG_ERR, "timer_create failed: %s\n", strerror(errno));
+	} else{
+		syslog(LOG_INFO, "Timer created successfully\n");
+	}
+
+    its.it_value.tv_sec = 10;
+    its.it_value.tv_nsec = 0;
+    its.it_interval.tv_sec = 10;
+    its.it_interval.tv_nsec = 0;
+
+    if(timer_settime(timerid, 0, &its, NULL) == -1){
+    	syslog(LOG_ERR, "timer_settime failed: %s\n", strerror(errno));
+	} else{
+		syslog(LOG_INFO, "Timer set successfully\n");
+	}
+}
 
 static void signal_handler(int signo)
 {
@@ -41,6 +106,11 @@ static void signal_handler(int signo)
     if (signo == SIGINT || signo == SIGTERM)
     {
         syslog(LOG_INFO, "Caught signal, exiting");
+        if (server_fd != -1)
+        {
+        	syslog(LOG_INFO, "Shutdown server");
+            shutdown(server_fd, SHUT_RDWR);
+        }
     }
 }
 
@@ -214,12 +284,9 @@ void *handle_client(void *thread_param)
     {
     	syslog(LOG_INFO, "Open %s success", FILE_PATH);
         ssize_t wr_bytes = write(fd, packet, total_size);
-        if(wr_bytes < total_size)
-        {
+        if(wr_bytes < total_size){
             syslog(LOG_ERR, "Failed write to %s", FILE_PATH);
-        }
-        else
-        {
+        } else{
             syslog(LOG_INFO, "Data appended to %s", FILE_PATH);
         }
         close(fd);
@@ -321,11 +388,29 @@ void cleanup()
 {
     syslog(LOG_INFO, "Exit flag 1 set");
 
+    // Stop timer
+    timer_delete(timerid);
+
+    // Stop accepting connections
     close(server_fd);
-    remove(FILE_PATH); // deleting the file on exit
+
+    // Join ALL remaining/incomplete threads
+    struct thread_data *curr = head;
+    while (curr != NULL)
+    {
+        pthread_join(curr->thread_id, NULL);
+
+        struct thread_data *temp = curr;
+        curr = curr->next;
+        free(temp);
+    }
+
+    // Destroy shared resources
+    pthread_mutex_destroy(&file_mutex);
+
+    remove(FILE_PATH);
 
     syslog(LOG_INFO, "Server cleanup complete");
-
     closelog();
 }
 
@@ -348,8 +433,11 @@ int main(int argc, char *argv[])
         
 	/*  Daemon Mode after ensuring socket bind to port 9000  */
     if (daemon_mode)
-        start_daemon();
-
+	{
+    	start_daemon();
+    }
+	init_timer();
+	
     if (start_listen() != 0)
         return -1;
 

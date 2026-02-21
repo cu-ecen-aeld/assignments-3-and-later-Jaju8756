@@ -40,8 +40,9 @@ This repo contains public starter source code, scripts, and documentation for Ad
 ## Assignment 6 Part 1:
 	a. add pthread, struct thread_data, mutex
 	b. modififed handle_client 
-	c. created handle_event inside allocate
-	d. 
+	c. created handle_event threads inside allocate
+	d. mutex implementation 
+	e. timer and timestamp prints	
 		
 	
 ## Setting Up Git

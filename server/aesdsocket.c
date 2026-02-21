@@ -12,6 +12,7 @@
 #include <netinet/in.h>
 #include <syslog.h>
 #include <fcntl.h>
+#include <pthread.h>
 
 #define PORT 9000
 #define FILE_PATH "/var/tmp/aesdsocketdata"
@@ -21,6 +22,18 @@ int server_fd = -1;
 bool caught_sigint = false;
 bool caught_sigterm = false;
 volatile sig_atomic_t exit_flag = 0;
+
+
+struct thread_data *head = NULL;
+pthread_mutex_t file_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+struct thread_data{
+    pthread_t thread_id;
+    int client_fd;
+    struct sockaddr_in client_addr;
+    bool thread_complete;
+    struct thread_data *next;
+};
 
 static void signal_handler(int signo)
 {
@@ -156,11 +169,12 @@ int start_listen()
     return 0;
 }
 
-void handle_client(int client_fd, struct sockaddr_in *client_addr)
+void *handle_client(void *thread_param)
 {
+	struct thread_data *data = (struct thread_data *)thread_param;
+	
     char client_ip[INET_ADDRSTRLEN];
-    inet_ntop(AF_INET, &client_addr->sin_addr,
-              client_ip, sizeof(client_ip));
+	inet_ntop(AF_INET, &(data->client_addr.sin_addr), client_ip, sizeof(client_ip));
 
     syslog(LOG_INFO, "Accepted connection from %s", client_ip);
 
@@ -171,7 +185,7 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr)
 
     while (1) // keeps receiving data from one connected client
     {
-        ssize_t bytes = recv(client_fd, buffer, sizeof(buffer), 0); // reads data from client socket into temporary buffer
+        ssize_t bytes = recv(data->client_fd, buffer, sizeof(buffer), 0); // reads data from client socket into temporary buffer
 
         if (bytes <= 0)
             break;
@@ -187,7 +201,7 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr)
         packet = new_packet; // pointers pointing to the same memory
         memcpy(packet + total_size, buffer, bytes); // appending buffer content into the packet
         total_size += bytes;
-
+		syslog(LOG_INFO, "packet sending started");
         if (memchr(buffer, '\n', bytes)) // newline? packet complete
             break;
     }
@@ -217,7 +231,7 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr)
 
 		while ((bytes_read = read(fd, buffer, sizeof(buffer))) > 0)
 		{
-			ssize_t bytes_sent = send(client_fd, buffer, bytes_read, 0);
+			ssize_t bytes_sent = send(data->client_fd, buffer, bytes_read, 0);
 			if (bytes_sent < 0)
 			{
 				syslog(LOG_ERR, "Send failed: %s", strerror(errno));
@@ -235,7 +249,9 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr)
     syslog(LOG_INFO, "Closed connection from %s", client_ip);
 
     free(packet);
-    close(client_fd);
+    close(data->client_fd);
+    data->thread_complete = true;
+	return NULL;
 }
 
 void accept_loop()
@@ -261,7 +277,39 @@ void accept_loop()
         }
         
 		/* Handle client communication */
-        handle_client(client_fd, &client_addr);
+        struct thread_data *new_thread = malloc(sizeof(struct thread_data));
+		new_thread->client_fd = client_fd;
+		new_thread->client_addr = client_addr;
+		new_thread->thread_complete = false;
+		new_thread->next = head;
+		head = new_thread;
+
+		pthread_create(&new_thread->thread_id, NULL, handle_client, new_thread);
+		
+		struct thread_data *curr = head;
+		struct thread_data *prev = NULL;
+
+		while (curr != NULL)
+		{
+			if (curr->thread_complete)
+			{
+				pthread_join(curr->thread_id, NULL);
+
+				if (prev == NULL)
+				    head = curr->next;
+				else
+				    prev->next = curr->next;
+
+				struct thread_data *temp = curr;
+				curr = curr->next;
+				free(temp);
+			}
+			else
+			{
+				prev = curr;
+				curr = curr->next;
+			}
+		} 
     }
 }
 

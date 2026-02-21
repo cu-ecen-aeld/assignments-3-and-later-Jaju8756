@@ -1,12 +1,13 @@
 #! /bin/sh
+#Ref: lecture video
 
 case "$1" in
   start)
-    echo "Start aesdsocket"
+    echo "Start aesdsocket server"
     start-stop-daemon -S -n aesdsocket -a /usr/bin/aesdsocket
     ;;
   stop)
-    echo "Stop aesdsocket"
+    echo "Stop aesdsocket server"
     start-stop-daemon -K -n aesdsocket
     ;;
   *)
@@ -15,3 +16,4 @@ case "$1" in
 esac
 
 exit 0
+

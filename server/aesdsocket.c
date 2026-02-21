@@ -183,6 +183,7 @@ void *handle_client(void *thread_param)
     size_t total_size = 0;
     char buffer[BUFFER_SIZE];
 
+	
     while (1) // keeps receiving data from one connected client
     {
         ssize_t bytes = recv(data->client_fd, buffer, sizeof(buffer), 0); // reads data from client socket into temporary buffer
@@ -205,7 +206,8 @@ void *handle_client(void *thread_param)
         if (memchr(buffer, '\n', bytes)) // newline? packet complete
             break;
     }
-
+	
+	pthread_mutex_lock(&file_mutex);
     int fd = open(FILE_PATH, O_CREAT | O_APPEND | O_WRONLY, 0644);
 
     if (fd >= 0 && packet)
@@ -245,11 +247,12 @@ void *handle_client(void *thread_param)
 		}
         close(fd);
     }
-
+	pthread_mutex_unlock(&file_mutex);
+	
     syslog(LOG_INFO, "Closed connection from %s", client_ip);
-
     free(packet);
     close(data->client_fd);
+ 
     data->thread_complete = true;
 	return NULL;
 }

@@ -1,3 +1,7 @@
+/* References: 	https://stackoverflow.com/questions/14320041/pthread-mutex-initializer-vs-pthread-mutex-init-mutex-param
+				https://man7.org/linux/man-pages/man3/strftime.3.html
+*/
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,6 +16,8 @@
 #include <netinet/in.h>
 #include <syslog.h>
 #include <fcntl.h>
+#include <pthread.h>
+#include <time.h>
 
 #define PORT 9000
 #define FILE_PATH "/var/tmp/aesdsocketdata"
@@ -21,6 +27,78 @@ int server_fd = -1;
 bool caught_sigint = false;
 bool caught_sigterm = false;
 volatile sig_atomic_t exit_flag = 0;
+timer_t timerid;
+
+// Mutex initializtion to keep multithreading safe
+pthread_mutex_t file_mutex = PTHREAD_MUTEX_INITIALIZER;
+struct thread_data *head = NULL;
+
+    
+struct thread_data{
+    pthread_t thread_id;
+    int client_fd;
+    struct sockaddr_in client_addr;
+    bool thread_complete;
+    struct thread_data *next;	// singly linked list
+};
+
+void timer_handler(union sigval arg)
+{
+    time_t t = time(NULL);
+    struct tm *tmp = localtime(&t);
+    char timebuf[128];
+
+    ssize_t len = strftime(timebuf, sizeof(timebuf), "timestamp:%a, %d %b %Y %H:%M:%S %z\n", tmp);
+    if (len == 0){
+        printf("strftime failed (buffer too small)\n");
+    } else{
+        printf("Formatted: %s (Bytes: %zu)\n", timebuf, len);
+    }    
+
+    pthread_mutex_lock(&file_mutex);
+
+    int fd = open(FILE_PATH, O_CREAT | O_APPEND | O_WRONLY, 0644);
+    if (fd >= 0)
+    {
+    	syslog(LOG_INFO, "Open %s success", FILE_PATH);
+        ssize_t write_t = write(fd, timebuf, strlen(timebuf));
+        if(write_t < strlen(timebuf)){
+            syslog(LOG_ERR, "Failed write timestamp to %s", FILE_PATH);
+        } else{
+            syslog(LOG_INFO, "Timestamp appended to %s", FILE_PATH);
+        }
+        close(fd);
+    }
+
+    pthread_mutex_unlock(&file_mutex);
+}
+
+void init_timer()
+{
+    struct sigevent sev;
+    struct itimerspec its;
+
+    memset(&sev, 0, sizeof(struct sigevent));
+    sev.sigev_notify = SIGEV_THREAD;
+    sev.sigev_notify_function = timer_handler;
+
+    if(timer_create(CLOCK_REALTIME, &sev, &timerid) == -1){
+    	syslog(LOG_ERR, "timer_create failed: %s\n", strerror(errno));
+	} else{
+		syslog(LOG_INFO, "Timer created successfully\n");
+	}
+
+    its.it_value.tv_sec = 10;
+    its.it_value.tv_nsec = 0;
+    its.it_interval.tv_sec = 10;
+    its.it_interval.tv_nsec = 0;
+
+    if(timer_settime(timerid, 0, &its, NULL) == -1){
+    	syslog(LOG_ERR, "timer_settime failed: %s\n", strerror(errno));
+	} else{
+		syslog(LOG_INFO, "Timer set successfully\n");
+	}
+}
 
 static void signal_handler(int signo)
 {
@@ -28,6 +106,11 @@ static void signal_handler(int signo)
     if (signo == SIGINT || signo == SIGTERM)
     {
         syslog(LOG_INFO, "Caught signal, exiting");
+        if (server_fd != -1)
+        {
+        	syslog(LOG_INFO, "Shutdown server");
+            shutdown(server_fd, SHUT_RDWR);
+        }
     }
 }
 
@@ -156,11 +239,12 @@ int start_listen()
     return 0;
 }
 
-void handle_client(int client_fd, struct sockaddr_in *client_addr)
+void *handle_client(void *thread_param)
 {
+	struct thread_data *data = (struct thread_data *)thread_param;
+	
     char client_ip[INET_ADDRSTRLEN];
-    inet_ntop(AF_INET, &client_addr->sin_addr,
-              client_ip, sizeof(client_ip));
+	inet_ntop(AF_INET, &(data->client_addr.sin_addr), client_ip, sizeof(client_ip));
 
     syslog(LOG_INFO, "Accepted connection from %s", client_ip);
 
@@ -169,9 +253,10 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr)
     size_t total_size = 0;
     char buffer[BUFFER_SIZE];
 
+	
     while (1) // keeps receiving data from one connected client
     {
-        ssize_t bytes = recv(client_fd, buffer, sizeof(buffer), 0); // reads data from client socket into temporary buffer
+        ssize_t bytes = recv(data->client_fd, buffer, sizeof(buffer), 0); // reads data from client socket into temporary buffer
 
         if (bytes <= 0)
             break;
@@ -187,23 +272,21 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr)
         packet = new_packet; // pointers pointing to the same memory
         memcpy(packet + total_size, buffer, bytes); // appending buffer content into the packet
         total_size += bytes;
-
+		syslog(LOG_INFO, "packet sending started");
         if (memchr(buffer, '\n', bytes)) // newline? packet complete
             break;
     }
-
+	
+	pthread_mutex_lock(&file_mutex);
     int fd = open(FILE_PATH, O_CREAT | O_APPEND | O_WRONLY, 0644);
 
     if (fd >= 0 && packet)
     {
     	syslog(LOG_INFO, "Open %s success", FILE_PATH);
         ssize_t wr_bytes = write(fd, packet, total_size);
-        if(wr_bytes < total_size)
-        {
+        if(wr_bytes < total_size){
             syslog(LOG_ERR, "Failed write to %s", FILE_PATH);
-        }
-        else
-        {
+        } else{
             syslog(LOG_INFO, "Data appended to %s", FILE_PATH);
         }
         close(fd);
@@ -217,7 +300,7 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr)
 
 		while ((bytes_read = read(fd, buffer, sizeof(buffer))) > 0)
 		{
-			ssize_t bytes_sent = send(client_fd, buffer, bytes_read, 0);
+			ssize_t bytes_sent = send(data->client_fd, buffer, bytes_read, 0);
 			if (bytes_sent < 0)
 			{
 				syslog(LOG_ERR, "Send failed: %s", strerror(errno));
@@ -231,11 +314,14 @@ void handle_client(int client_fd, struct sockaddr_in *client_addr)
 		}
         close(fd);
     }
-
+	pthread_mutex_unlock(&file_mutex);
+	
     syslog(LOG_INFO, "Closed connection from %s", client_ip);
-
     free(packet);
-    close(client_fd);
+    close(data->client_fd);
+ 
+    data->thread_complete = true;
+	return NULL;
 }
 
 void accept_loop()
@@ -261,7 +347,39 @@ void accept_loop()
         }
         
 		/* Handle client communication */
-        handle_client(client_fd, &client_addr);
+        struct thread_data *new_thread = malloc(sizeof(struct thread_data));
+		new_thread->client_fd = client_fd;
+		new_thread->client_addr = client_addr;
+		new_thread->thread_complete = false;
+		new_thread->next = head;
+		head = new_thread;
+
+		pthread_create(&new_thread->thread_id, NULL, handle_client, new_thread);
+		
+		struct thread_data *curr = head;
+		struct thread_data *prev = NULL;
+
+		while (curr != NULL)
+		{
+			if (curr->thread_complete)
+			{
+				pthread_join(curr->thread_id, NULL);
+
+				if (prev == NULL)
+				    head = curr->next;
+				else
+				    prev->next = curr->next;
+
+				struct thread_data *temp = curr;
+				curr = curr->next;
+				free(temp);
+			}
+			else
+			{
+				prev = curr;
+				curr = curr->next;
+			}
+		} 
     }
 }
 
@@ -270,11 +388,29 @@ void cleanup()
 {
     syslog(LOG_INFO, "Exit flag 1 set");
 
+    // Stop timer
+    timer_delete(timerid);
+
+    // Stop accepting connections
     close(server_fd);
-    remove(FILE_PATH); // deleting the file on exit
+
+    // Join ALL remaining/incomplete threads
+    struct thread_data *curr = head;
+    while (curr != NULL)
+    {
+        pthread_join(curr->thread_id, NULL);
+
+        struct thread_data *temp = curr;
+        curr = curr->next;
+        free(temp);
+    }
+
+    // Destroy shared resources
+    pthread_mutex_destroy(&file_mutex);
+
+    remove(FILE_PATH);
 
     syslog(LOG_INFO, "Server cleanup complete");
-
     closelog();
 }
 
@@ -297,8 +433,11 @@ int main(int argc, char *argv[])
         
 	/*  Daemon Mode after ensuring socket bind to port 9000  */
     if (daemon_mode)
-        start_daemon();
-
+	{
+    	start_daemon();
+    }
+	init_timer();
+	
     if (start_listen() != 0)
         return -1;
 

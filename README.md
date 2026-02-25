@@ -1,7 +1,7 @@
 # aesd-assignments
 This repo contains public starter source code, scripts, and documentation for Advanced Embedded Software Development (ECEN-5713) and Advanced Embedded Linux Development assignments University of Colorado, Boulder.
 
-## Assignment 5:
+## Assignment 5 Part 1:
 	1. creating necessary directories
 	2. Makefile (Ref: )
 	3. asedsocket.c
@@ -13,6 +13,37 @@ This repo contains public starter source code, scripts, and documentation for Ad
 						: if enough space exists, extends the same block pointed by the old_pointer
 						: else allocate new bigger block, copy old data, free old block, return new pointer
 		e. malloc(filesize) can't be used as we can't assume that filesize fits in RAM
+		d. Error:==12356== ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 0 from 0)
+			deleting marker file /tmp/tmp.BMmZlC2tZc
+			~/AESD/assignment-1-Jaju8756/assignment-autotest/test/assignment5 ~/AESD/assignment-1-Jaju8756/assignment-autotest/test/assignment5 ~/AESD/assignment-1-Jaju8756/server ~/AESD/assignment-1-Jaju8756/assignment-autotest/test/assignment5 ~/AESD/assignment-1-Jaju8756
+			Testing target localhost on port 9000
+			sending string abcdefg to localhost on port 9000
+			Differences found after sending abcdefg to localhost on port 9000
+			Expected contents to match:
+			abcdefg
+			But found contents:
+			With differences
+			--- /tmp/tmp.tqUpkoGGI5	2026-02-14 15:24:00.200547552 -0700
+			+++ /tmp/tmp.ACcUXLk11F	2026-02-14 15:24:00.195548547 -0700
+			@@ -1 +0,0 @@
+			-abcdefg
+			Test complete with failure
+			Validation Error:sockettest.sh returned 1 attempting to run against native compiled aesdsocket instance running under valgrind
+		
+
+## Assignment 5 Part 2:
+	a. add: aesdsocket-start-stop
+	b. Modify aesd-assignments.mk
+		full commit hash: git rev-parse HEAD
+	c. Forward host port 9000 in runqemu.sh
+
+## Assignment 6 Part 1:
+	a. add pthread, struct thread_data, mutex
+	b. modififed handle_client 
+	c. created handle_event threads inside allocate
+	d. mutex implementation 
+	e. timer and timestamp prints	
+		
 	
 ## Setting Up Git
 

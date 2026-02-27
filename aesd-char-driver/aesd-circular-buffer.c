@@ -29,10 +29,44 @@
 struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct aesd_circular_buffer *buffer,
             size_t char_offset, size_t *entry_offset_byte_rtn )
 {
-    /**
-    * TODO: implement per description
-    */
-    return NULL;
+    if (buffer == NULL || entry_offset_byte_rtn == NULL)
+        return NULL;
+
+    uint8_t index = buffer->out_offs;
+    size_t total_bytes_seen = 0;
+
+    while (1)
+    {
+        // If buffer is NOT full and we reached in_offs, it means there are no more valid entries
+        if (buffer->full == false && index == buffer->in_offs)
+        {
+            return NULL;  
+        }
+
+        size_t current_entry_size = buffer->entry[index].size;
+
+        // Check if char_offset falls inside this entry
+        if (char_offset < total_bytes_seen + current_entry_size)
+        {
+            // Calculate byte offset inside this entry
+            *entry_offset_byte_rtn = char_offset - total_bytes_seen;
+            return &buffer->entry[index];
+        }
+
+        total_bytes_seen += current_entry_size;
+
+        index = index + 1;
+        if (index >= AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED)
+        {
+            index = 0;
+        }
+
+        // If buffer is full and we came back to out_offs, we have checked all entries
+        if (buffer->full == true && index == buffer->out_offs)
+        {
+            return NULL;  
+        }
+    }
 }
 
 /**
@@ -44,9 +78,24 @@ struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct
 */
 void aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer, const struct aesd_buffer_entry *add_entry)
 {
-    /**
-    * TODO: implement per description
-    */
+	if (buffer == NULL || add_entry == NULL)
+	return;
+
+    // If buffer is full, overwrite oldest entry
+    if (buffer->full) {
+        buffer->out_offs = (buffer->out_offs + 1) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
+    }
+
+    // Insert new entry at in_offs
+    buffer->entry[buffer->in_offs] = *add_entry;
+
+    // Move in_offs forward
+    buffer->in_offs = (buffer->in_offs + 1) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
+
+    // If in_offs catches up to out_offs → buffer is full
+    if (buffer->in_offs == buffer->out_offs) {
+        buffer->full = true;
+    }
 }
 
 /**

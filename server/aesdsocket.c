@@ -44,8 +44,8 @@ struct thread_data{
 
 void timer_handler(union sigval arg)
 {
-    time_t t = time(NULL);
-    struct tm *tmp = localtime(&t);
+    time_t t = time(NULL);	//current time in seconds since epoch
+    struct tm *tmp = localtime(&t); 	//converts it to human-readable local time
     char timebuf[128];
 
     ssize_t len = strftime(timebuf, sizeof(timebuf), "timestamp:%a, %d %b %Y %H:%M:%S %z\n", tmp);
@@ -75,11 +75,11 @@ void timer_handler(union sigval arg)
 
 void init_timer()
 {
-    struct sigevent sev;
-    struct itimerspec its;
+    struct sigevent sev;	//describes how the timer notifies you
+    struct itimerspec its;	//describes initial expiration & interval
 
     memset(&sev, 0, sizeof(struct sigevent));
-    sev.sigev_notify = SIGEV_THREAD;
+    sev.sigev_notify = SIGEV_THREAD;	//timer expiration runs handler in a new thread
     sev.sigev_notify_function = timer_handler;
 
     if(timer_create(CLOCK_REALTIME, &sev, &timerid) == -1){
@@ -251,7 +251,7 @@ void *handle_client(void *thread_param)
     /*  Logic: Receive Until Newline  */
     char *packet = NULL;
     size_t total_size = 0;
-    char buffer[BUFFER_SIZE];
+    char buffer[BUFFER_SIZE]; // temporary chunk receiver 
 
 	
     while (1) // keeps receiving data from one connected client

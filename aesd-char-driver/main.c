@@ -60,23 +60,25 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
      */
      
     struct aesd_dev *dev = filp->private_data;
-    struct aesd_buffer_entry *entry;
-    size_t entry_offset;
 
     mutex_lock(&dev->lock);
 
+    struct aesd_buffer_entry *entry;
+    size_t entry_offset;
+
+    // find entry for current f_pos
     entry = aesd_circular_buffer_find_entry_offset_for_fpos(
         &dev->buffer, *f_pos, &entry_offset);
 
-    if(!entry)
+    if (!entry) {
+    	retval = 0;
         goto out;
-
+	}
+	
+    // calculate how many bytes can be read in this call
     size_t bytes_to_copy = min(count, entry->size - entry_offset);
 
-    if(copy_to_user(buf,
-        entry->buffptr + entry_offset,
-        bytes_to_copy))
-    {
+    if (copy_to_user(buf, entry->buffptr + entry_offset, bytes_to_copy)) {
         retval = -EFAULT;
         goto out;
     }
@@ -92,51 +94,53 @@ out:
 ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
                 loff_t *f_pos)
 {
-    ssize_t retval = -ENOMEM;
     PDEBUG("write %zu bytes with offset %lld",count,*f_pos);
     /**
      * TODO: handle write
      */
      
+    ssize_t retval = count;
     struct aesd_dev *dev = filp->private_data;
     char *kbuf;
-    retval = count;
 
+    PDEBUG("write %zu bytes with offset %lld", count, *f_pos);
+
+    /* Allocate temporary buffer to copy from user space */
     kbuf = kmalloc(count, GFP_KERNEL);
-    if(!kbuf)
+    if (!kbuf)
         return -ENOMEM;
 
-    if(copy_from_user(kbuf, buf, count))
-    {
+    if (copy_from_user(kbuf, buf, count)) {
         kfree(kbuf);
         return -EFAULT;
     }
 
     mutex_lock(&dev->lock);
 
+    /* Append to the current write buffer */
     dev->write_buffer = krealloc(dev->write_buffer,
                                  dev->write_buffer_size + count,
                                  GFP_KERNEL);
+    if (!dev->write_buffer) {
+        mutex_unlock(&dev->lock);
+        kfree(kbuf);
+        return -ENOMEM;
+    }
 
-    memcpy(dev->write_buffer + dev->write_buffer_size,
-           kbuf,
-           count);
-
+    memcpy(dev->write_buffer + dev->write_buffer_size, kbuf, count);
     dev->write_buffer_size += count;
 
-    if(memchr(kbuf, '\n', count))
-    {
+    /* If newline found, push buffer into circular buffer */
+    if (memchr(dev->write_buffer, '\n', dev->write_buffer_size)) {
         struct aesd_buffer_entry entry;
-        struct aesd_buffer_entry *old_entry;
 
         entry.buffptr = dev->write_buffer;
         entry.size = dev->write_buffer_size;
 
-        old_entry = aesd_circular_buffer_add_entry(&dev->buffer, &entry);
+        /* Add entry to circular buffer */
+        aesd_circular_buffer_add_entry(&dev->buffer, &entry);
 
-        if(old_entry)
-            kfree(old_entry->buffptr);
-
+        /* Reset dev->write_buffer for next write */
         dev->write_buffer = NULL;
         dev->write_buffer_size = 0;
     }
@@ -144,7 +148,6 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     mutex_unlock(&dev->lock);
 
     kfree(kbuf);
-
     return retval;
 }
 
@@ -213,16 +216,24 @@ void aesd_cleanup_module(void)
     /**
      * TODO: cleanup AESD specific poritions here as necessary
      */
-	int i;
+	uint8_t index;
+    struct aesd_buffer_entry *entry;
 
-	for(i = 0; i < AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED; i++)
-	{
-		if(aesd_device.buffer.entry[i].buffptr)
-		    kfree(aesd_device.buffer.entry[i].buffptr);
-	}
+    /* Free all circular buffer entries */
+     AESD_CIRCULAR_BUFFER_FOREACH(entry, &aesd_device.buffer, index) {
+        if (entry->buffptr) {
+            kfree((void *)entry->buffptr);
+            entry->buffptr = NULL;
+        }
+    }
 
-	if(aesd_device.write_buffer)
-		kfree(aesd_device.write_buffer);
+    /* Free any partial write buffer */
+    if (aesd_device.write_buffer) {
+        kfree(aesd_device.write_buffer);
+        aesd_device.write_buffer = NULL;
+    }
+
+    mutex_destroy(&aesd_device.lock);
 		
     unregister_chrdev_region(devno, 1);
 }

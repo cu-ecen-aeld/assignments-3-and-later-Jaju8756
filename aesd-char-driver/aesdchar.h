@@ -33,10 +33,10 @@ struct aesd_dev
      * TODO: Add structure(s) and locks needed to complete assignment requirements
      */
     struct cdev cdev;     /* Char device structure      */
-    struct aesd_circular_buffer buffer;
-    char *write_buffer;
-    size_t write_buffer_size;
-    struct mutex lock;
+    struct aesd_circular_buffer buffer;   //Circular buffer stores write commands 
+    char *write_buffer;              //Buffer for incomplete or no '\n' write data
+    size_t write_buffer_size;        
+    struct mutex lock;                  
 };
 
 int aesd_open(struct inode *inode, struct file *filp);

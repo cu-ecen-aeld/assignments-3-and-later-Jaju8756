@@ -53,19 +53,20 @@ int aesd_release(struct inode *inode, struct file *filp)
 ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
                 loff_t *f_pos)
 {
-    ssize_t retval = 0;
+    struct aesd_dev *dev;
+    dev = filp->private_data;
+    
+    ssize_t retval = 0; 
+    struct aesd_buffer_entry *entry;
+    size_t entry_offset; 
+    size_t bytes_to_copy;
     PDEBUG("read %zu bytes with offset %lld",count,*f_pos);
     /**
      * TODO: handle read
      */
-     
-    struct aesd_dev *dev = filp->private_data;
 
     mutex_lock(&dev->lock);
-
-    struct aesd_buffer_entry *entry;
-    size_t entry_offset;
-
+    
     // find entry for current f_pos
     entry = aesd_circular_buffer_find_entry_offset_for_fpos(
         &dev->buffer, *f_pos, &entry_offset);
@@ -76,7 +77,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
 	}
 	
     // calculate how many bytes can be read in this call
-    size_t bytes_to_copy = min(count, entry->size - entry_offset);
+    bytes_to_copy = min(count, entry->size - entry_offset);
 
     if (copy_to_user(buf, entry->buffptr + entry_offset, bytes_to_copy)) {
         retval = -EFAULT;
@@ -94,12 +95,12 @@ out:
 ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
                 loff_t *f_pos)
 {
-    PDEBUG("write %zu bytes with offset %lld",count,*f_pos);
     /**
      * TODO: handle write
      */
      
-    ssize_t retval = count;
+    ssize_t retval = -ENOMEM;
+    retval = count;
     struct aesd_dev *dev = filp->private_data;
     char *kbuf;
 
@@ -209,6 +210,9 @@ int aesd_init_module(void)
 
 void aesd_cleanup_module(void)
 {
+    uint8_t index;
+    struct aesd_buffer_entry *entry;
+    
     dev_t devno = MKDEV(aesd_major, aesd_minor);
 
     cdev_del(&aesd_device.cdev);
@@ -216,8 +220,6 @@ void aesd_cleanup_module(void)
     /**
      * TODO: cleanup AESD specific poritions here as necessary
      */
-	uint8_t index;
-    struct aesd_buffer_entry *entry;
 
     /* Free all circular buffer entries */
      AESD_CIRCULAR_BUFFER_FOREACH(entry, &aesd_device.buffer, index) {

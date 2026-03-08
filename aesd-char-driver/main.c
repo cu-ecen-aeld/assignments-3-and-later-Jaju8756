@@ -98,11 +98,11 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     /**
      * TODO: handle write
      */
-     
-    ssize_t retval = -ENOMEM;
-    retval = count;
     struct aesd_dev *dev;
     char *kbuf;
+    
+    ssize_t retval = -ENOMEM;
+    retval = count;
 
     PDEBUG("write %zu bytes with offset %lld", count, *f_pos);
 

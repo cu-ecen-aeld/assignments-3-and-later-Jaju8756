@@ -18,10 +18,11 @@
 #include <linux/cdev.h>
 #include <linux/fs.h> // file_operations
 #include "aesdchar.h"
+
 int aesd_major =   0; // use dynamic major
 int aesd_minor =   0;
 
-MODULE_AUTHOR("Your Name Here"); /** TODO: fill in your name **/
+MODULE_AUTHOR("Jacqulin Justin"); /** TODO: fill in your name **/
 MODULE_LICENSE("Dual BSD/GPL");
 
 struct aesd_dev aesd_device;
@@ -32,6 +33,11 @@ int aesd_open(struct inode *inode, struct file *filp)
     /**
      * TODO: handle open
      */
+    struct aesd_dev *dev;
+
+    dev = container_of(inode->i_cdev, struct aesd_dev, cdev);
+    filp->private_data = dev;
+    
     return 0;
 }
 
@@ -52,6 +58,34 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     /**
      * TODO: handle read
      */
+     
+    struct aesd_dev *dev = filp->private_data;
+    struct aesd_buffer_entry *entry;
+    size_t entry_offset;
+
+    mutex_lock(&dev->lock);
+
+    entry = aesd_circular_buffer_find_entry_offset_for_fpos(
+        &dev->buffer, *f_pos, &entry_offset);
+
+    if(!entry)
+        goto out;
+
+    size_t bytes_to_copy = min(count, entry->size - entry_offset);
+
+    if(copy_to_user(buf,
+        entry->buffptr + entry_offset,
+        bytes_to_copy))
+    {
+        retval = -EFAULT;
+        goto out;
+    }
+
+    *f_pos += bytes_to_copy;
+    retval = bytes_to_copy;
+
+out:
+    mutex_unlock(&dev->lock);
     return retval;
 }
 
@@ -63,8 +97,57 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     /**
      * TODO: handle write
      */
+     
+    struct aesd_dev *dev = filp->private_data;
+    char *kbuf;
+    retval = count;
+
+    kbuf = kmalloc(count, GFP_KERNEL);
+    if(!kbuf)
+        return -ENOMEM;
+
+    if(copy_from_user(kbuf, buf, count))
+    {
+        kfree(kbuf);
+        return -EFAULT;
+    }
+
+    mutex_lock(&dev->lock);
+
+    dev->write_buffer = krealloc(dev->write_buffer,
+                                 dev->write_buffer_size + count,
+                                 GFP_KERNEL);
+
+    memcpy(dev->write_buffer + dev->write_buffer_size,
+           kbuf,
+           count);
+
+    dev->write_buffer_size += count;
+
+    if(memchr(kbuf, '\n', count))
+    {
+        struct aesd_buffer_entry entry;
+        struct aesd_buffer_entry *old_entry;
+
+        entry.buffptr = dev->write_buffer;
+        entry.size = dev->write_buffer_size;
+
+        old_entry = aesd_circular_buffer_add_entry(&dev->buffer, &entry);
+
+        if(old_entry)
+            kfree(old_entry->buffptr);
+
+        dev->write_buffer = NULL;
+        dev->write_buffer_size = 0;
+    }
+
+    mutex_unlock(&dev->lock);
+
+    kfree(kbuf);
+
     return retval;
 }
+
 struct file_operations aesd_fops = {
     .owner =    THIS_MODULE,
     .read =     aesd_read,
@@ -106,6 +189,12 @@ int aesd_init_module(void)
      * TODO: initialize the AESD specific portion of the device
      */
 
+ 	mutex_init(&aesd_device.lock);
+	aesd_circular_buffer_init(&aesd_device.buffer);
+
+	aesd_device.write_buffer = NULL;
+	aesd_device.write_buffer_size = 0;
+
     result = aesd_setup_cdev(&aesd_device);
 
     if( result ) {
@@ -124,10 +213,19 @@ void aesd_cleanup_module(void)
     /**
      * TODO: cleanup AESD specific poritions here as necessary
      */
+	int i;
 
+	for(i = 0; i < AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED; i++)
+	{
+		if(aesd_device.buffer.entry[i].buffptr)
+		    kfree(aesd_device.buffer.entry[i].buffptr);
+	}
+
+	if(aesd_device.write_buffer)
+		kfree(aesd_device.write_buffer);
+		
     unregister_chrdev_region(devno, 1);
 }
-
 
 
 module_init(aesd_init_module);

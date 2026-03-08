@@ -20,8 +20,17 @@
 #include <time.h>
 
 #define PORT 9000
-#define FILE_PATH "/var/tmp/aesdsocketdata"
 #define BUFFER_SIZE 1024
+
+#ifndef USE_AESD_CHAR_DEVICE
+#define USE_AESD_CHAR_DEVICE 1
+#endif
+
+#if USE_AESD_CHAR_DEVICE
+#define FILE_PATH "/dev/aesdchar"
+#else
+#define FILE_PATH "/var/tmp/aesdsocketdata"
+#endif
 
 int server_fd = -1;
 bool caught_sigint = false;
@@ -42,6 +51,7 @@ struct thread_data{
     struct thread_data *next;	// singly linked list
 };
 
+#if !USE_AESD_CHAR_DEVICE
 void timer_handler(union sigval arg)
 {
     time_t t = time(NULL);	//current time in seconds since epoch
@@ -99,6 +109,7 @@ void init_timer()
 		syslog(LOG_INFO, "Timer set successfully\n");
 	}
 }
+#endif
 
 static void signal_handler(int signo)
 {
@@ -244,7 +255,7 @@ void *handle_client(void *thread_param)
 	struct thread_data *data = (struct thread_data *)thread_param;
 	
     char client_ip[INET_ADDRSTRLEN];
-	inet_ntop(AF_INET, &(data->client_addr.sin_addr), client_ip, sizeof(client_ip));
+    inet_ntop(AF_INET, &(data->client_addr.sin_addr), client_ip, sizeof(client_ip));
 
     syslog(LOG_INFO, "Accepted connection from %s", client_ip);
 
@@ -278,7 +289,16 @@ void *handle_client(void *thread_param)
     }
 	
 	pthread_mutex_lock(&file_mutex);
+	
+#if USE_AESD_CHAR_DEVICE
+    int fd = open(FILE_PATH, O_WRONLY);
+#else
     int fd = open(FILE_PATH, O_CREAT | O_APPEND | O_WRONLY, 0644);
+#endif
+
+	if (fd < 0) {
+		syslog(LOG_ERR, "Failed to open %s: %s", FILE_PATH, strerror(errno));
+	}
 
     if (fd >= 0 && packet)
     {
@@ -354,7 +374,11 @@ void accept_loop()
 		new_thread->next = head;
 		head = new_thread;
 
-		pthread_create(&new_thread->thread_id, NULL, handle_client, new_thread);
+		int pCreate = pthread_create(&new_thread->thread_id, NULL, handle_client, new_thread);
+		if (pCreate != 0)
+		{
+			syslog(LOG_ERR, "Thread creation failed: %s", strerror(errno));
+		}
 		
 		struct thread_data *curr = head;
 		struct thread_data *prev = NULL;
@@ -389,7 +413,9 @@ void cleanup()
     syslog(LOG_INFO, "Exit flag 1 set");
 
     // Stop timer
+#if !USE_AESD_CHAR_DEVICE
     timer_delete(timerid);
+#endif
 
     // Stop accepting connections
     close(server_fd);
@@ -408,7 +434,9 @@ void cleanup()
     // Destroy shared resources
     pthread_mutex_destroy(&file_mutex);
 
-    remove(FILE_PATH);
+#if !USE_AESD_CHAR_DEVICE
+	remove(FILE_PATH);
+#endif
 
     syslog(LOG_INFO, "Server cleanup complete");
     closelog();
@@ -436,8 +464,10 @@ int main(int argc, char *argv[])
 	{
     	start_daemon();
     }
+    
+#if !USE_AESD_CHAR_DEVICE
 	init_timer();
-	
+#endif
     if (start_listen() != 0)
         return -1;
 

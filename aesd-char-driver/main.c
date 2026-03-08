@@ -29,12 +29,13 @@ struct aesd_dev aesd_device;
 
 int aesd_open(struct inode *inode, struct file *filp)
 {
+    struct aesd_dev *dev;
+    
     PDEBUG("open");
     /**
      * TODO: handle open
      */
-    struct aesd_dev *dev;
-
+    
     dev = container_of(inode->i_cdev, struct aesd_dev, cdev);
     filp->private_data = dev;
     
@@ -53,9 +54,7 @@ int aesd_release(struct inode *inode, struct file *filp)
 ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
                 loff_t *f_pos)
 {
-    struct aesd_dev *dev;
-    dev = filp->private_data;
-    
+    struct aesd_dev *dev;   
     ssize_t retval = 0; 
     struct aesd_buffer_entry *entry;
     size_t entry_offset; 
@@ -64,7 +63,8 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     /**
      * TODO: handle read
      */
-
+     
+    dev = filp->private_data;
     mutex_lock(&dev->lock);
     
     // find entry for current f_pos
@@ -101,7 +101,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
      
     ssize_t retval = -ENOMEM;
     retval = count;
-    struct aesd_dev *dev = filp->private_data;
+    struct aesd_dev *dev;
     char *kbuf;
 
     PDEBUG("write %zu bytes with offset %lld", count, *f_pos);
@@ -115,7 +115,8 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
         kfree(kbuf);
         return -EFAULT;
     }
-
+    
+    dev = filp->private_data;
     mutex_lock(&dev->lock);
 
     /* Append to the current write buffer */

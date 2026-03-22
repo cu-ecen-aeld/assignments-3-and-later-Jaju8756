@@ -18,6 +18,7 @@
 #include <fcntl.h>
 #include <pthread.h>
 #include <time.h>
+#include "../aesd-char-driver/aesd_ioctl.h"
 
 #define PORT 9000
 #define BUFFER_SIZE 1024
@@ -277,6 +278,7 @@ void *handle_client(void *thread_param)
         {
             syslog(LOG_ERR, "Memory allocation failed");
             free(packet);
+            packet = NULL;
             break;
         }
 
@@ -291,10 +293,101 @@ void *handle_client(void *thread_param)
 	pthread_mutex_lock(&file_mutex);
 	
 #if USE_AESD_CHAR_DEVICE
-    int fd = open(FILE_PATH, O_WRONLY);
+	if (packet && strncmp(packet, "AESDCHAR_IOCSEEKTO:", 19) == 0)
+    {
+        /*  IOCTL PATH  */
+        unsigned int x = 0, y = 0;
+
+        /* Ensure null-terminated copy */
+        char *cmd = strndup(packet, total_size);
+        if (!cmd)
+        {
+            syslog(LOG_ERR, "strndup failed");
+            pthread_mutex_unlock(&file_mutex);
+            goto cleanup;
+        }
+
+        if (sscanf(cmd + 19, "%u,%u", &x, &y) == 2)
+        {
+            struct aesd_seekto seekto;
+            seekto.write_cmd = x;
+            seekto.write_cmd_offset = y;
+
+            int fd = open(FILE_PATH, O_RDWR);
+            if (fd < 0)
+            {
+                syslog(LOG_ERR, "open failed: %s", strerror(errno));
+                free(cmd);
+                pthread_mutex_unlock(&file_mutex);
+                goto cleanup;
+            }
+
+            /*  Perform IOCTL */
+            if (ioctl(fd, AESDCHAR_IOCSEEKTO, &seekto) != 0)
+            {
+                syslog(LOG_ERR, "ioctl failed: %s", strerror(errno));
+            }
+
+            ssize_t bytes_read;
+            while ((bytes_read = read(fd, buffer, sizeof(buffer))) > 0)
+            {
+                if (send(data->client_fd, buffer, bytes_read, 0) < 0)
+                {
+                    syslog(LOG_ERR, "send failed: %s", strerror(errno));
+                    break;
+                }
+            }
+            close(fd);
+        }
+        else
+        {
+            syslog(LOG_ERR, "Invalid IOCTL format");
+        }
+        free(cmd);
+    }
+    else
+    {
+        /*  NORMAL WRITE PATH  */
+
+        int fd = open(FILE_PATH, O_RDWR);
+        if (fd < 0)
+        {
+            syslog(LOG_ERR, "open failed: %s", strerror(errno));
+            pthread_mutex_unlock(&file_mutex);
+            goto cleanup;
+        }
+
+        /* Write packet */
+        ssize_t written = 0;
+        while (written < (ssize_t)total_size)
+        {
+            ssize_t w = write(fd, packet + written, total_size - written);
+            if (w <= 0)
+            {
+                syslog(LOG_ERR, "write failed: %s", strerror(errno));
+                break;
+            }
+            written += w;
+        }
+
+        /* Reset file offset to beginning for read */
+        lseek(fd, 0, SEEK_SET);
+
+        /* Read back entire content */
+        ssize_t bytes_read;
+        while ((bytes_read = read(fd, buffer, sizeof(buffer))) > 0)
+        {
+            if (send(data->client_fd, buffer, bytes_read, 0) < 0)
+            {
+                syslog(LOG_ERR, "send failed: %s", strerror(errno));
+                break;
+            }
+        }
+
+        close(fd);
+    }
 #else
     int fd = open(FILE_PATH, O_CREAT | O_APPEND | O_WRONLY, 0644);
-#endif
 
 	if (fd < 0) {
 		syslog(LOG_ERR, "Failed to open %s: %s", FILE_PATH, strerror(errno));
@@ -334,8 +427,10 @@ void *handle_client(void *thread_param)
 		}
         close(fd);
     }
+#endif
 	pthread_mutex_unlock(&file_mutex);
-	
+
+cleanup:
     syslog(LOG_INFO, "Closed connection from %s", client_ip);
     free(packet);
     close(data->client_fd);
